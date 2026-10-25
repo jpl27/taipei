@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Taipei</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #f2f1ed; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #222; }
+  #map { position: fixed; inset: 0; }
+  #maperr { display: none; position: fixed; inset: 0; align-items: center; justify-content: center;
+            padding: 24px; text-align: center; background: #f2f1ed; z-index: 5; }
+  /* Base-layer toggle: bottom-left, clear of the attribution (bottom-right) and the controls (top-right) */
+  #baseToggle { position: fixed; left: 12px; bottom: calc(14px + env(safe-area-inset-bottom)); z-index: 2;
+                font: 600 15px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                padding: 12px 16px; border: 0; border-radius: 10px; background: #fff; color: #222;
+                box-shadow: 0 1px 4px rgba(0,0,0,.3); cursor: pointer; }
+  #baseToggle[aria-pressed="true"] { background: #1f5f8b; color: #fff; }
+  .maplibregl-ctrl-top-right { top: env(safe-area-inset-top); }
+  .maplibregl-ctrl-group button { width: 40px; height: 40px; }   /* thumb-sized */
+</style>
+</head>
+<body>
+<div id="site-header"></div>
+<div id="map"></div>
+<div id="maperr"></div>
+<button id="baseToggle" type="button" aria-pressed="false">Aerial photo</button>
+<script>
+(function () {
+'use strict';
+
+/* ---------- Settings ---------- */
+const NLSC_CREDIT = 'Base map and aerial photo: National Land Surveying and Mapping Center (國土測繪中心), Open Government Data License';
+const VIEW = {
+  center: [121.515, 25.045],                 /* old walled city */
+  zoom: 13, minZoom: 10, maxZoom: 19,
+  maxBounds: [[121.35, 24.90], [121.70, 25.22]]   /* Taipei basin: Tamsui to Xindian, Yangmingshan to Banqiao */
+};
+
+/* ---------- Base layers (NLSC WMTS; note {y} before {x}) ---------- */
+const SOURCES = {
+  emap:   { type: 'raster', tileSize: 256, maxzoom: 19, attribution: NLSC_CREDIT,
+            tiles: ['https://wmts.nlsc.gov.tw/wmts/EMAP/default/GoogleMapsCompatible/{z}/{y}/{x}'] },
+  photo2: { type: 'raster', tileSize: 256, maxzoom: 19, attribution: NLSC_CREDIT,
+            tiles: ['https://wmts.nlsc.gov.tw/wmts/PHOTO2/default/GoogleMapsCompatible/{z}/{y}/{x}'] }
+};
+const LAYERS = [
+  { id: 'base-emap',   type: 'raster', source: 'emap' },
+  { id: 'base-photo2', type: 'raster', source: 'photo2', layout: { visibility: 'none' } }
+];
+
+/* ---------- Era layers (FUTURE) ----------
+   Five era overlays go here later: add their sources to SOURCES and layers to ERA_LAYERS.
+   They draw above the base layers; era buttons and a fade slider will set
+   visibility and 'raster-opacity'. Kept empty for now. */
+const ERA_LAYERS = [];
+
+/* ---------- Map ---------- */
+let map;
+try {
+  map = new maplibregl.Map({
+    container: 'map',
+    style: { version: 8, sources: SOURCES, layers: LAYERS.concat(ERA_LAYERS) },
+    center: VIEW.center, zoom: VIEW.zoom, minZoom: VIEW.minZoom, maxZoom: VIEW.maxZoom,
+    maxBounds: VIEW.maxBounds,
+    attributionControl: false, dragRotate: false, pitchWithRotate: false
+  });
+} catch (err) {
+  const me = document.getElementById('maperr');
+  me.style.display = 'flex';
+  me.textContent = 'This browser could not start the map (it needs WebGL). ' + err.message;
+  return;
+}
+window.__map = map;
+map.touchZoomRotate.disableRotation();
+map.on('error', function (e) {
+  console.warn('[map] ' + ((e && e.sourceId) ? e.sourceId + ': ' : '') + ((e && e.error && e.error.message) || 'error'));
+});
+
+/* ---------- Controls (same setup as the Tokyo map) ---------- */
+map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
+/* Compact credit starts open in MapLibre; fold it to the (i) button once the map loads so it does not cover the map. */
+map.once('load', function () {
+  const a = document.querySelector('.maplibregl-ctrl-attrib');
+  if (a) { a.classList.remove('maplibregl-compact-show'); a.removeAttribute('open'); }
+});
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+map.addControl(new maplibregl.GeolocateControl({
+  positionOptions: { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
+  trackUserLocation: true, showAccuracyCircle: true
+}), 'top-right');
+
+/* ---------- Base-layer toggle: street map <-> aerial photo ---------- */
+function setVis(id, on) {
+  if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+}
+const btn = document.getElementById('baseToggle');
+btn.addEventListener('click', function () {
+  const aerial = btn.getAttribute('aria-pressed') !== 'true';
+  btn.setAttribute('aria-pressed', aerial ? 'true' : 'false');
+  btn.textContent = aerial ? 'Street map' : 'Aerial photo';
+  setVis('base-photo2', aerial);
+  setVis('base-emap', !aerial);
+});
+
+})();
+</script>
+</body>
+</html>
