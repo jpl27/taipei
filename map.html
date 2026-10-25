@@ -13,27 +13,59 @@
   #map { position: fixed; inset: 0; }
   #maperr { display: none; position: fixed; inset: 0; align-items: center; justify-content: center;
             padding: 24px; text-align: center; background: #f2f1ed; z-index: 5; }
-  /* Base-layer toggle: bottom-left, clear of the attribution (bottom-right) and the controls (top-right) */
-  #baseToggle { position: fixed; left: 12px; bottom: calc(14px + env(safe-area-inset-bottom)); z-index: 2;
-                font: 600 15px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                padding: 12px 16px; border: 0; border-radius: 10px; background: #fff; color: #222;
-                box-shadow: 0 1px 4px rgba(0,0,0,.3); cursor: pointer; }
-  #baseToggle[aria-pressed="true"] { background: #1f5f8b; color: #fff; }
   .maplibregl-ctrl-top-right { top: env(safe-area-inset-top); }
   .maplibregl-ctrl-group button { width: 40px; height: 40px; }   /* thumb-sized */
+
+  /* Era bar: bottom-left, stops short of the credit (i) button at bottom-right;
+     location and zoom buttons stay top-right. */
+  #eraBar { position: fixed; z-index: 2; left: 8px; right: 44px; max-width: 460px;
+            bottom: calc(8px + env(safe-area-inset-bottom));
+            background: rgba(255,255,255,.95); border-radius: 12px; padding: 7px 8px 6px;
+            box-shadow: 0 1px 5px rgba(0,0,0,.3); font-size: 13px; }
+  #eraBtns { display: flex; gap: 4px; }
+  #eraBtns button { flex: 1 1 0; min-width: 0; padding: 9px 2px; border: 0; border-radius: 8px;
+                    background: #ecebe6; color: #222; font-family: inherit; font-weight: 600; font-size: 13px; line-height: 1.1; cursor: pointer; }
+  #eraBtns button[aria-pressed="true"] { background: #8b3a1f; color: #fff; }
+  .eraRow { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+  .eraRow label { white-space: nowrap; font-size: 12px; color: #555; }
+  #mix { flex: 1 1 auto; min-width: 60px; accent-color: #8b3a1f; }
+  #mix:disabled { opacity: .35; }
+  #baseToggle, #subToggle { font-family: inherit; font-weight: 600; font-size: 12px; line-height: 1; padding: 8px 9px; border: 0; border-radius: 8px;
+                            background: #ecebe6; color: #222; cursor: pointer; white-space: nowrap; }
+  #baseToggle[aria-pressed="true"], #subToggle[aria-pressed="true"] { background: #1f5f8b; color: #fff; }
+  #subToggle[hidden] { display: none; }
+  #eraNote { margin-top: 5px; font-size: 11.5px; line-height: 1.3; color: #444; }
+  #eraNote b { color: #8b3a1f; }
 </style>
 </head>
 <body>
 <div id="site-header"></div>
 <div id="map"></div>
 <div id="maperr"></div>
-<button id="baseToggle" type="button" aria-pressed="false">Aerial photo</button>
+<div id="eraBar">
+  <div id="eraBtns" role="group" aria-label="Choose a period">
+    <button type="button" data-era="qing"  aria-pressed="false">Qing 1888</button>
+    <button type="button" data-era="e1904" aria-pressed="false">1904</button>
+    <button type="button" data-era="e1935" aria-pressed="false">1935</button>
+    <button type="button" data-era="e1957" aria-pressed="false">1957</button>
+    <button type="button" data-era="today" aria-pressed="true">Today</button>
+  </div>
+  <div class="eraRow">
+    <label for="mix">Old map</label>
+    <input id="mix" type="range" min="0" max="100" step="1" value="0" disabled aria-label="Fade between the old map and today">
+    <label for="mix">Today</label>
+    <button id="subToggle" type="button" aria-pressed="false" hidden>1945 US map</button>
+    <button id="baseToggle" type="button" aria-pressed="false">Aerial photo</button>
+  </div>
+  <div id="eraNote">Today's map. Pick a year to see an old map.</div>
+</div>
 <script>
 (function () {
 'use strict';
 
 /* ---------- Settings ---------- */
 const NLSC_CREDIT = 'Base map and aerial photo: National Land Surveying and Mapping Center (國土測繪中心), Open Government Data License';
+const GIS_CREDIT = 'Historical maps: Academia Sinica Center for GIS (中央研究院人社中心GIS專題中心), CC BY-NC';
 const VIEW = {
   center: [121.515, 25.045],                 /* old walled city */
   zoom: 13, minZoom: 10, maxZoom: 19,
@@ -52,11 +84,46 @@ const LAYERS = [
   { id: 'base-photo2', type: 'raster', source: 'photo2', layout: { visibility: 'none' } }
 ];
 
-/* ---------- Era layers (FUTURE) ----------
-   Five era overlays go here later: add their sources to SOURCES and layers to ERA_LAYERS.
-   They draw above the base layers; era buttons and a fade slider will set
-   visibility and 'raster-opacity'. Kept empty for now. */
+/* ---------- Era layers (Academia Sinica Center for GIS tiles) ----------
+   Template A = Taipei city maps, Template B = Taiwan-wide maps.
+   minzoom/maxzoom come from probing central Taipei on 2026-10-25: outside these zooms
+   the server returns a blank (transparent) tile, so MapLibre stretches the last real zoom instead. */
+const TPL_A = function (layer) { return 'https://gis.sinica.edu.tw/taipei/file-exists.php?img=' + layer + '-png-{z}-{x}-{y}'; };
+const TPL_B = function (layer, ext) { return 'https://gis.sinica.edu.tw/tileserver/file-exists.php?img=' + layer + '-' + ext + '-{z}-{x}-{y}'; };
+const Q1888_BOUNDS = [121.469, 25.013, 121.556, 25.081];
+const ERA_SRC = {
+  'h-1888':   { tiles: [TPL_A('Taipei_1888')],     minzoom: 11, maxzoom: 17, bounds: Q1888_BOUNDS,
+                name: '1888 map of Taipei prefecture (臺北府之圖)' },
+  'h-1904':   { tiles: [TPL_B('JM20K_1904', 'jpg')], minzoom: 10, maxzoom: 18,
+                name: '1904 Japanese survey of Taiwan, 1:20,000 (臺灣堡圖)' },
+  'h-1903':   { tiles: [TPL_A('Taipei_1903')],     minzoom: 12, maxzoom: 18,
+                name: '1903 survey map of Taipei city (最近實測臺北全圖)' },
+  'h-1935':   { tiles: [TPL_A('Taipei_1935')],     minzoom: 13, maxzoom: 17,
+                name: '1935 Taipei street map (臺北市街圖)' },
+  'h-1945':   { tiles: [TPL_A('AMCityPlan_1945')], minzoom: 12, maxzoom: 17,
+                name: '1945 US Army city plan of Taipei' },
+  'h-1957':   { tiles: [TPL_A('Taipei_1957')],     minzoom: 11, maxzoom: 18,
+                name: '1957 map of Taipei' }
+};
 const ERA_LAYERS = [];
+Object.keys(ERA_SRC).forEach(function (id) {
+  const s = ERA_SRC[id];
+  const src = { type: 'raster', tileSize: 256, tiles: s.tiles, minzoom: s.minzoom, maxzoom: s.maxzoom,
+                attribution: GIS_CREDIT + ' — ' + s.name };
+  if (s.bounds) src.bounds = s.bounds;
+  SOURCES[id] = src;
+  ERA_LAYERS.push({ id: id, type: 'raster', source: id, layout: { visibility: 'none' },
+                    paint: { 'raster-opacity': 1, 'raster-fade-duration': 150 } });
+});
+
+/* Each era lists its layers (drawn bottom to top) and a short label for the note line. */
+const ERAS = {
+  qing:  { layers: ['h-1888'],           short: '1888' },
+  e1904: { layers: ['h-1904', 'h-1903'], short: '1904' },
+  e1935: { layers: ['h-1935'],           short: '1935', alt: { layers: ['h-1945'], short: '1945' } },
+  e1957: { layers: ['h-1957'],           short: '1957' },
+  today: { layers: [] }
+};
 
 /* ---------- Map ---------- */
 let map;
@@ -105,6 +172,65 @@ btn.addEventListener('click', function () {
   setVis('base-photo2', aerial);
   setVis('base-emap', !aerial);
 });
+
+/* ---------- Era buttons and fade slider ---------- */
+const mix = document.getElementById('mix');
+const note = document.getElementById('eraNote');
+const sub = document.getElementById('subToggle');
+const eraBtns = Array.prototype.slice.call(document.querySelectorAll('#eraBtns button'));
+let era = 'today';
+let useAlt = false;    /* 1935 era: show the 1945 US Army plan instead */
+
+function activeSet() {
+  const e = ERAS[era];
+  return (useAlt && e.alt) ? e.alt : e;
+}
+function applyOpacity() {
+  const op = 1 - Number(mix.value) / 100;     /* slider left = old map only, right = today only */
+  activeSet().layers.forEach(function (id) {
+    if (map.getLayer(id)) map.setPaintProperty(id, 'raster-opacity', op);
+  });
+}
+function updateNote() {
+  if (era === 'today') { note.textContent = "Today's map. Pick a year to see an old map."; return; }
+  const set = activeSet();
+  const minZ = Math.min.apply(null, set.layers.map(function (id) { return ERA_SRC[id].minzoom; }));
+  const names = set.layers.map(function (id) { return ERA_SRC[id].name; }).join(' + ');
+  let html = '';
+  if (map.getZoom() < minZ) html += '<b>Zoom in to see the ' + set.short + ' map.</b> ';
+  html += names + '. Source: Academia Sinica Center for GIS, CC BY-NC.';
+  note.innerHTML = html;
+}
+function showEra(next) {
+  era = next;
+  Object.keys(ERA_SRC).forEach(function (id) { setVis(id, false); });
+  const set = activeSet();
+  set.layers.forEach(function (id) { setVis(id, true); });
+  eraBtns.forEach(function (b) { b.setAttribute('aria-pressed', b.dataset.era === era ? 'true' : 'false'); });
+  mix.disabled = (era === 'today');
+  sub.hidden = !ERAS[era].alt;
+  sub.setAttribute('aria-pressed', useAlt ? 'true' : 'false');
+  applyOpacity();
+  updateNote();
+}
+eraBtns.forEach(function (b) {
+  b.addEventListener('click', function () {
+    const next = b.dataset.era;
+    if (next !== era) mix.value = 0;      /* a new period starts fully on the old map */
+    showEra(next);
+    if (next === 'qing') {
+      const c = map.getCenter(), bb = Q1888_BOUNDS;
+      const outside = c.lng < bb[0] || c.lng > bb[2] || c.lat < bb[1] || c.lat > bb[3];
+      if (outside || map.getZoom() < 12) {
+        map.flyTo({ center: [121.512, 25.043], zoom: Math.max(map.getZoom(), 14) });
+      }
+    }
+  });
+});
+sub.addEventListener('click', function () { useAlt = !useAlt; showEra(era); });
+mix.addEventListener('input', applyOpacity);
+map.on('zoomend', updateNote);
+map.once('load', function () { showEra('today'); });
 
 })();
 </script>
